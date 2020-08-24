@@ -1,0 +1,242 @@
+---
+title: "Test_therMizer_plankton"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/21/2020"
+output:
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to test the plankton aspect of the therMizer extension.  Specifically, we want to test using CMIP6-derived resource spectra in place of the mizer resource spectra.  If everything works, we can move on to evaluating whether it's necessary to scale the resource spectra as was done in the previous FishMIP contribution and in [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full).  
+
+## Load libraries
+Mizer 2.0.3 or later version is needed to use the extension. 
+
+```{r message = FALSE, warning = FALSE}
+library(mizer)
+```
+
+## Set up multispecies model 
+For the FishMIP simulations, we'll be using the species parameters in [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full).  We'll also follow their implemetation of fishing mortality, so will need to create a selectivity function which we'll call `knife_edge_phased`.  And, so that the times align correctly, we'll use the time series of effort created with "CreateF.Rmd".   We're also going to create another time series with F = 0 so that we can use the same years for all our scenarios.
+
+```{r message = FALSE, warning = FALSE}
+
+# Create the selectivity function:
+
+#' Size based knife-edge selectivity function that is phased in 
+#'
+#' A knife-edge selectivity function where only sizes greater or equal to
+#' \code{knife_edge_size1} are selected.  Selectivity is then phased in through
+#' size \code{knife_edge_size2}.  This simulates the reduced effectiveness of 
+#' longline gear for smaller fish
+#'
+#' @param w The size of the individual.
+#' @param knife_edge_size1 The size at which the knife-edge is initiated.
+#' @param knife_edge_size2 The size at which selectivity is fully realized.
+#' @export
+knife_edge_phased <- function(w, knife_edge_size1, knife_edge_size2, ...) { 
+	sel <- rep(0, length(w)) 
+	
+	# Phased in linearly
+	F0 <- which(w < knife_edge_size1) # to find one size smaller than that fished, for the 0 value 
+	F1 <- which(w < knife_edge_size2) # to find end of escalation size range 
+	lo_sel <- max(F0):max(F1) 
+	sel[lo_sel] <- seq(0, 1, length = length(lo_sel)) # linear increase from 0 to F 
+	sel[w >= knife_edge_size2] <- 1 
+	return(sel) 
+	
+} 
+
+# Load fishing scenario
+effort_Fvar <- read.table("FishingEffort.dat", sep = " ")
+effort_Fvar <- effort_Fvar[,2] # Column 1 = year, which we won't need
+effort_Fvar <- as(effort_Fvar, "matrix")
+
+# Build fishing effort arrays
+# Since we're following the approach of Woodworth-Jefcoats et al. 2019, we'll begin the model with 600 years of constant input for spinup.  This means the first year will be 1350 (1950 - 600).
+times <- seq(1350, 2100, by = 1)
+gear_names <- c("Longline")
+effort_array_Fvar <- array(NA, dim = c(length(times), length(gear_names)), dimnames = list(time = times, gear = gear_names))
+effort_array_F0 <- array(NA, dim = c(length(times), length(gear_names)), dimnames = list(time = times, gear = gear_names))
+
+# Now fill the array
+# Remember, the first 600 years are for spin-up.
+# During this time, the first input value is repeated at each time step.
+for (t in (times-1349)){
+	if (t <= 601){ 
+		effort_array_Fvar[t,"Longline"] <- effort_Fvar[1]
+		effort_array_F0[t,"Longline"] <- 0
+	} else {
+		effort_array_Fvar[t,"Longline"] <- effort_Fvar[t-600]
+		effort_array_F0[t,"Longline"] <- 0
+		}
+}
+
+
+# Load species parameters
+species_params <- read.csv('NPac_species_params.csv')
+
+# Load interaction matrix
+inter <- read.csv('inter_NPAC.csv', row.names = 1)
+inter <- as(inter, "matrix")
+
+# Create the params object
+params <- newMultispeciesParams(species_params, interaction = inter, min_w_pp = 1e-14, no_w = 100, kappa = 1e12, w_pp_cutoff = 455400*1.1)
+
+```
+
+## Load plankton data
+
+Before we crate the resource functions, we'll load in the FishMIP plankton forcing.  
+There are four climate scenarios:  
+
+* picontrol: pre-industrial climate as simulated by the Earth System Models (ESMs)  
+* historical: historical climate as simulated by the ESMs, starting in 1950  
+* ssp126: SSP1-RCP2.6 climate as simulated by the ESMs  
+* ssp585" SSP5-RCP8.5 climate as simulated by the ESMs  
+
+and both ssp126 and ssp585 will be appended to historical.  Note that only the years 1950 - 2100 are needed.  These were created with "PrepPlankton.Rmd".  
+
+```{r}
+
+# Load data for each CMIP6 model: GFDL-ESM4 and IPSL-CM6A-LR
+GFDL_n_pp_PIcontrol <- read.table("GFDL_n_pp_array_PIcontrol.dat")
+GFDL_n_pp_CC126 <- read.table("GFDL_n_pp_array_CCscenario_126.dat")
+GFDL_n_pp_CC585 <- read.table("GFDL_n_pp_array_CCscenario_585.dat")
+
+IPSL_n_pp_PIcontrol <- read.table("IPSL_n_pp_array_PIcontrol.dat")
+IPSL_n_pp_CC126 <- read.table("IPSL_n_pp_array_CCscenario_126.dat")
+IPSL_n_pp_CC585 <- read.table("IPSL_n_pp_array_CCscenario_585.dat")
+
+GFDL_n_pp_PIcontrol <- as(GFDL_n_pp_PIcontrol, "matrix")
+GFDL_n_pp_CC126 <- as(GFDL_n_pp_CC126, "matrix")
+GFDL_n_pp_CC585 <- as(GFDL_n_pp_CC585, "matrix")
+
+IPSL_n_pp_PIcontrol <- as(IPSL_n_pp_PIcontrol, "matrix")
+IPSL_n_pp_CC126 <- as(IPSL_n_pp_CC126, "matrix")
+IPSL_n_pp_CC585 <- as(IPSL_n_pp_CC585, "matrix")
+
+# Build plankton arrays to be filled
+sizes <- params@w_full
+
+n_pp_array_GFDL_PIcontrol <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+n_pp_array_GFDL_CC126 <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+n_pp_array_GFDL_CC585 <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+n_pp_array_IPSL_PIcontrol <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+n_pp_array_IPSL_CC126 <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+n_pp_array_IPSL_CC585 <- array(NA, dim = c(length(times), length(sizes)), dimnames = list(time = times, w = sizes))
+
+# Fill arrays, remembering that values in n_pp are log10 abundances.
+# They'll need to be transformed (inverse log10) and divided by bin width (dw_full)
+
+for (t in (times-1349)){
+	if (t <= 601){ 
+		n_pp_array_GFDL_PIcontrol[t,] <- (10^(GFDL_n_pp_PIcontrol[1,]))/params@dw_full
+		n_pp_array_GFDL_CC126[t,] <- (10^(GFDL_n_pp_CC126[1,]))/params@dw_full
+		n_pp_array_GFDL_CC585[t,] <- (10^(GFDL_n_pp_CC585[1,]))/params@dw_full
+		n_pp_array_IPSL_PIcontrol[t,] <- (10^(IPSL_n_pp_PIcontrol[1,]))/params@dw_full
+		n_pp_array_IPSL_CC126[t,] <- (10^(IPSL_n_pp_CC126[1,]))/params@dw_full
+		n_pp_array_IPSL_CC585[t,] <- (10^(IPSL_n_pp_CC585[1,]))/params@dw_full
+	} else {
+		n_pp_array_GFDL_PIcontrol[t,] <- (10^(GFDL_n_pp_PIcontrol[t-600]))/params@dw_full
+		n_pp_array_GFDL_CC126[t,] <- (10^(GFDL_n_pp_CC126[t-600]))/params@dw_full
+		n_pp_array_GFDL_CC585[t,] <- (10^(GFDL_n_pp_CC585[t-600]))/params@dw_full
+		n_pp_array_IPSL_PIcontrol[t,] <- (10^(IPSL_n_pp_PIcontrol[t-600]))/params@dw_full
+		n_pp_array_IPSL_CC126[t,] <- (10^(IPSL_n_pp_CC126[t-600]))/params@dw_full
+		n_pp_array_IPSL_CC585[t,] <- (10^(IPSL_n_pp_CC585[t-600]))/params@dw_full
+		}
+}
+
+# Take first time step for initial_n_pp
+init_n_pp_GFDL_PIcontrol <- n_pp_array_GFDL_PIcontrol[1,]
+init_n_pp_GFDL_CC126 <- n_pp_array_GFDL_CC126[1,]
+init_n_pp_GFDL_CC585 <- n_pp_array_GFDL_CC585[1,]
+init_n_pp_IPSL_PIcontrol <- n_pp_array_IPSL_PIcontrol[1,]
+init_n_pp_IPSL_CC126 <- n_pp_array_IPSL_CC126[1,]
+init_n_pp_IPSL_CC585 <- n_pp_array_IPSL_CC585[1,]
+
+```
+
+
+## Write a new rate function to use the CMIP6 plankton densities.
+
+Now we'll write a function to use the CMIP6 plankton densities rather than the mizer resource dynamics.  Code for this was informed by the approach used in: <https://rpubs.com/gustav/plankton-anchovy>.  
+
+We're also going to create a parameter called `t_idx` that will help with the simulations.  This parameter will provide the correct time index for the plankton forcing during the simulations.
+
+```{r}
+
+# Create the needed parameters
+# Time indexing parameter
+# This will be added to t to convert the year into an index for the n_pp array
+if (min(times) == 0) {
+  other_params(params)$t_idx = 1
+} else if (min(times) == 1) {
+  other_params(params)$t_idx = 0
+} else {
+  other_params(params)$t_idx = -(min(times) - 1)
+}
+  
+# Set up new resource forcing "function" - just changes to different timeslot in the n_pp_array array
+plankton_forcing <- function(params, t, ...) {
+    return(params@other_params$other$n_pp_array[t + params@other_params$other$t_idx,])  
+}
+
+# Attach the new function
+params@resource_dynamics <- "plankton_forcing"
+
+```
+
+## Run the simulations
+
+Because n_pp is now a parameter, we'll need to make unique `params` objects for each model and climate scenarios.  This means we'll have six new `params` objects (2 models x 3 climate scenarios).
+
+```{r message = FALSE, warning = FALSE}
+
+# Create parameter objects
+params_GFDL_PI <- params
+params_GFDL_CC126 <- params
+params_GFDL_CC585 <- params
+
+params_IPSL_PI <- params
+params_IPSL_CC126 <- params
+params_IPSL_CC585 <- params
+
+# Attach resource spectra
+other_params(params_GFDL_PI)$n_pp_array <- n_pp_array_GFDL_PIcontrol
+other_params(params_GFDL_CC126)$n_pp_array <- n_pp_array_GFDL_CC126
+other_params(params_GFDL_CC585)$n_pp_array <- n_pp_array_GFDL_CC585
+
+other_params(params_IPSL_PI)$n_pp_array <- n_pp_array_IPSL_PIcontrol
+other_params(params_IPSL_CC126)$n_pp_array <- n_pp_array_IPSL_CC126
+other_params(params_IPSL_CC585)$n_pp_array <- n_pp_array_IPSL_CC585
+
+# Attached initial n_pp
+params_GFDL_PI@initial_n_pp <- n_pp_array_GFDL_PIcontrol[1,]
+params_GFDL_CC126@initial_n_pp <- n_pp_array_GFDL_CC126[1,]
+params_GFDL_CC585@initial_n_pp <- n_pp_array_GFDL_CC585[1,]
+
+params_IPSL_PI@initial_n_pp <- n_pp_array_IPSL_PIcontrol[1,]
+params_IPSL_CC126@initial_n_pp <- n_pp_array_IPSL_CC126[1,]
+params_IPSL_CC585@initial_n_pp <- n_pp_array_IPSL_CC585[1,]
+
+```
+
+Now we can try running a few simulations.
+
+``` {r message = FALSE, warning = FALSE}
+
+sim_GFDL_PI_F0 <- project(params_GFDL_PI, t_max = length(times), effort = effort_array_F0)
+sim_GFDL_PI_Fvar <- project(params_GFDL_PI, t_max = length(times), effort = effort_array_Fvar)
+sim_GFDL_CC585_Fvar <- project(params_GFDL_CC585, t_max = length(times), effort = effort_array_Fvar)
+plot(sim_GFDL_PI_F0)
+plot(sim_GFDL_PI_Fvar)
+plot(sim_GFDL_CC585_Fvar)
+
+```
+
+Well, that worked, albeit not terribly well.  We'll now move on to "Scaling_therMizer_plankton.Rmd" to scale the CMIP6 input as was done in the previous FishMIP contribution.

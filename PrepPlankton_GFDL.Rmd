@@ -1,0 +1,21 @@
+---
+title: "PrepPlankton_GFDL"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/17/2020"
+output: 
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to create time series of plankton spectra for the therMizer FishMIP runs.  There are four climate scenarios:
+* picontrol: pre-industrial climate as simulated by the Earth System Models (ESMs)
+* historical: historical climate as simulated by the ESMs, starting in 1950
+* ssp126: SSP1-RCP2.6 climate as simulated by the ESMs
+* ssp585" SSP5-RCP8.5 climate as simulated by the ESMs
+and both ssp126 and ssp585 will be appended to historical.  Note that only the years 1950 - 2100 are needed.
+
+## Plankton

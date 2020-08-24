@@ -1,0 +1,13 @@
+species,w_inf,w_mat,beta,sigma,k_vb,w_min,gear,r_max,temp_min,temp_max,knife_edge_size1,knife_edge_size2,catchability,sel_func
+Bigeye,95200,29000,100,1,0.354,0.001,Longline,3.40E+03,3,29,4771,44184,1,knife_edge_phased
+Mahi,29800,1024,100,1,1.2991,0.001,Longline,1.94E+04,21,30,1417,4771,1,knife_edge_phased
+BlueShark,182139,38880,400,1,0.132,353,Longline,1.29E+03,5,23,5841,54093,1,knife_edge_phased
+Skipjack,13122,1200,100,1,0.7,0.001,Longline,6.65E+04,10,33,2124,7151,1,knife_edge_phased
+Yellowfin,93400,28480,100,1,0.724,0.001,Longline,3.50E+03,7,31,2600,29479,1,knife_edge_phased
+Albacore,37200,15220,100,1,0.2483,0.001,Longline,1.39E+04,7,25,5841,19668,1,knife_edge_phased
+StripedMarlin,68000,59400,100,1,0.24,0.001,Longline,5.64E+03,11,30,7151,29479,1,knife_edge_phased
+Wahoo,43200,7030,100,1,1.58,0.001,Longline,1.11E+04,22,28,3183,13122,1,knife_edge_phased
+Swordfish,182138,33699,100,1,0.2585,0.001,Longline,1.29E+03,2,30,1735,16065,1,knife_edge_phased
+BlueMarlin,455400,77560,100,1,0.26,0.001,Longline,3.25E+02,17,31,16065,54093,1,knife_edge_phased
+Lancetfish,8273,109,100,1,0.235,0.001,Longline,1.33E+05,2,30,229,3897,1,knife_edge_phased
+Opah,89000,20050,100,1,0.218,0.001,Longline,3.77E+03,8,22,13122,36090,1,knife_edge_phased

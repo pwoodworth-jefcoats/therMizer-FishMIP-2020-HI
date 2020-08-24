@@ -1,0 +1,371 @@
+---
+title: "PrepPlankton"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/20/2020"
+output: 
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to create resource spectra for the therMizer FishMIP runs.  There are four climate scenarios:
+
+* picontrol: pre-industrial climate as simulated by the Earth System Models (ESMs)
+* historical: historical climate as simulated by the ESMs, starting in 1950
+* ssp126: SSP1-RCP2.6 climate as simulated by the ESMs
+* ssp585" SSP5-RCP8.5 climate as simulated by the ESMs  
+
+and both ssp126 and ssp585 will be appended to historical.  Note that only the years 1950 - 2100 are needed.
+
+## Plankton community
+
+To facilitate comparison with the previous FishMIP simulations, we'll use the same approach as with the previous FishMIP contribution, which follows that of [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full).  We'll use the same assumptions about plankton size classes, as this doesn't appear to have changed between CMIP5 and CMIP6 for either model we're using.  The GFDL-ESM4 includes small, large, and diazotrophic phytoplankton, as well as three classes of zooplankton [Dunne et al. 2020](https://agupubs.onlinelibrary.wiley.com/doi/abs/10.1029/2019MS002015).  The IPSL-CM6A-LR includes nanophytoplankton, diatoms, microzooplankton, and mesozooplankton [Boucher et al. 2020](https://agupubs.onlinelibrary.wiley.com/doi/10.1029/2019MS002010).  
+
+## Preparing CMIP6 model output for therMizer
+
+The general approach we'll take to convert the CMIP6 plankton data in to resource spectra includes these steps:  
+
+* Convert from moles C to grams wet weight  
+  + mol C m^-2^ $\times$ 12.011 g mol^-1^ = g C m^-2^    
+  + g C m^-2^ $\times$ 10 = gww m^-2^  
+* Determine total biomass over model domain  
+  + gww m^-2^ $\times$ km^2^ $\times$ 10^6^ = gww  
+* Calculate abundance in each plankton size class  
+  + gww / median size of size class = abundance in size class  
+  + To convert size from $\mu$m ESD to gww: (4/3) $\times$ $\pi$ $\times$ (0.5 $\times$ ESD $\times$ 0.0001)^3^ = gww
+* Determine linear abundance spectra  
+* Use the slope and intercept from the linear abundance to determine the resource spectra over the full size range
+* If necessary, scale the resulting resource spectra to obtain similiar levels of food limition as those that arise from the mizer-calculated resource spectra  
+
+Note that the CMIP6 data don't include values for the smaller phytoplankton size classes.  These will have to be derived by subtracting the larger size class from total plankton.
+
+``` {r}
+
+# First, let's create the values we'll need.  See Woodworth-Jefcoats et al. 2019 for references.
+#	nano = 2 - 20 um ESD (mid-point size = 11 um ESD)
+#	smallGFDL = 0.2 - 5 um ESD (mid-point size = 2.4 um ESD)
+#	large (diatoms and diazotrophs) = 20 - 200 um ESD (mid-point size = 110 um ESD)
+#	largeGDFL = 5 - 200 um ESD (mid-point = 102.5 um ESD)
+#	zmicro = 2 - 20 um ESD (mid-point size = 11 um ESD)
+#	zmeso = 20 - 500 um ESD (mid-point size = 260 um ESD)
+
+nano <- (4/3)*pi*((0.5*11*0.0001)^3)
+smallGFDL <- (4/3)*pi*((0.5*2.4*0.0001)^3)
+large <- (4/3)*pi*((0.5*110*0.0001)^3)
+largeGFDL <- (4/3)*pi*((0.5*102.5*0.0001)^3)
+zmicro <- (4/3)*pi*((0.5*11*0.0001)^3)
+zmeso <- (4/3)*pi*((0.5*260*0.0001)^3)
+
+area = 20527092 * 10^6
+
+# Load data
+GFDL_picon <- read.csv("Hawaii_GFDL-ESM4_picontrol_annual_1601_2100.csv", header = TRUE)
+GFDL_hist <- read.csv("Hawaii_GFDL-ESM4_historical_annual_1850_2014.csv", header = TRUE)
+GFDL_ssp126 <- read.csv("Hawaii_GFDL-ESM4_ssp126_annual_2015_2100.csv", header = TRUE)
+GFDL_ssp585 <- read.csv("Hawaii_GFDL-ESM4_ssp585_annual_2015_2100.csv", header = TRUE)
+
+IPSL_picon <- read.csv("Hawaii_IPSL-CM6A-LR_picontrol_annual_1601_2100.csv", header = TRUE)
+IPSL_hist <- read.csv("Hawaii_IPSL-CM6A-LR_historical_annual_1850_2014.csv", header = TRUE)
+IPSL_ssp126 <- read.csv("Hawaii_IPSL-CM6A-LR_ssp126_annual_2015_2100.csv", header = TRUE)
+IPSL_ssp585 <- read.csv("Hawaii_IPSL-CM6A-LR_ssp585_annual_2015_2100.csv", header = TRUE)
+
+# Calculate numerical abundance in each size class, for only the years we're interested in
+GFDL_picon_yrs <- which(GFDL_picon$Date..yyyy. >= 1950)
+IPSL_picon_yrs <- which(IPSL_picon$Date..yyyy. >= 1950)
+GFDL_hist_yrs <- which(GFDL_hist$Date..yyyy. >= 1950)
+IPSL_hist_yrs <- which(IPSL_hist$Date..yyyy. >= 1950)
+
+GFDL_picon_sm_num <- ((GFDL_picon$phyc.vint..mol.m.2.[GFDL_picon_yrs] - GFDL_picon$phydiat.vint..mol.m.2.[GFDL_picon_yrs]) * 12.011 * 10 * area) / smallGFDL
+GFDL_picon_lg_num <- (GFDL_picon$phydiat.vint..mol.m.s.[GFDL_picon_yrs] * 12.011 * 10 * area) / largeGFDL
+GFDL_picon_zmicro_num <- (GFDL_picon$zmicro.vint..mol.m.2.[GFDL_picon_yrs] * 12.011 * 10 * area) / zmicro
+GFDL_picon_zmeso_num <- (GFDL_picon$zmeso.vint..mol.m.2.[GFDL_picon_yrs] * 12.011 * 10 * area) / zmeso
+
+GFDL_hist_sm_num <- ((GFDL_hist$phyc.vint..mol.m.2.[GFDL_hist_yrs] - GFDL_hist$phydiat.vint..mol.m.2.[GFDL_hist_yrs]) * 12.011 * 10 * area) / smallGFDL
+GFDL_hist_lg_num <- (GFDL_hist$phydiat.vint..mol.m.s.[GFDL_hist_yrs] * 12.011 * 10 * area) / largeGFDL
+GFDL_hist_zmicro_num <- (GFDL_hist$zmicro.vint..mol.m.2.[GFDL_hist_yrs] * 12.011 * 10 * area) / zmicro
+GFDL_hist_zmeso_num <- (GFDL_hist$zmeso.vint..mol.m.2.[GFDL_hist_yrs] * 12.011 * 10 * area) / zmeso
+
+GFDL_ssp126_sm_num <- ((GFDL_ssp126$phyc.vint..mol.m.2. - GFDL_ssp126$phydiat.vint..mol.m.2.) * 12.011 * 10 * area) / smallGFDL
+GFDL_ssp126_lg_num <- (GFDL_ssp126$phydiat.vint..mol.m.s. * 12.011 * 10 * area) / largeGFDL
+GFDL_ssp126_zmicro_num <- (GFDL_ssp126$zmicro.vint..mol.m.2. * 12.011 * 10 * area) / zmicro
+GFDL_ssp126_zmeso_num <- (GFDL_ssp126$zmeso.vint..mol.m.2. * 12.011 * 10 * area) / zmeso
+
+GFDL_ssp585_sm_num <- ((GFDL_ssp585$phyc.vint..mol.m.2. - GFDL_ssp585$phydiat.vint..mol.m.2.) * 12.011 * 10 * area) / smallGFDL
+GFDL_ssp585_lg_num <- (GFDL_ssp585$phydiat.vint..mol.m.s. * 12.011 * 10 * area) / largeGFDL
+GFDL_ssp585_zmicro_num <- (GFDL_ssp585$zmicro.vint..mol.m.2. * 12.011 * 10 * area) / zmicro
+GFDL_ssp585_zmeso_num <- (GFDL_ssp585$zmeso.vint..mol.m.2. * 12.011 * 10 * area) / zmeso
+
+IPSL_picon_nano_num <- ((IPSL_picon$phyc.vint..mol.m.2.[IPSL_picon_yrs] - IPSL_picon$phydiat.vint..mol.m.2.[IPSL_picon_yrs]) * 12.011 * 10 * area) / nano
+IPSL_picon_lg_num <- (IPSL_picon$phydiat.vint..mol.m.s.[IPSL_picon_yrs] * 12.011 * 10 * area) / large
+IPSL_picon_zmicro_num <- (IPSL_picon$zmicro.vint..mol.m.2.[IPSL_picon_yrs] * 12.011 * 10 * area) / zmicro
+IPSL_picon_zmeso_num <- (IPSL_picon$zmeso.vint..mol.m.2.[IPSL_picon_yrs] * 12.011 * 10 * area) / zmeso
+
+IPSL_hist_nano_num <- ((IPSL_hist$phyc.vint..mol.m.2.[IPSL_hist_yrs] - IPSL_hist$phydiat.vint..mol.m.2.[IPSL_hist_yrs]) * 12.011 * 10 * area) / nano
+IPSL_hist_lg_num <- (IPSL_hist$phydiat.vint..mol.m.s.[IPSL_hist_yrs] * 12.011 * 10 * area) / large
+IPSL_hist_zmicro_num <- (IPSL_hist$zmicro.vint..mol.m.2.[IPSL_hist_yrs] * 12.011 * 10 * area) / zmicro
+IPSL_hist_zmeso_num <- (IPSL_hist$zmeso.vint..mol.m.2.[IPSL_hist_yrs] * 12.011 * 10 * area) / zmeso
+
+IPSL_ssp126_nano_num <- ((IPSL_ssp126$phyc.vint..mol.m.2. - IPSL_ssp126$phydiat.vint..mol.m.2.) * 12.011 * 10 * area) / nano
+IPSL_ssp126_lg_num <- (IPSL_ssp126$phydiat.vint..mol.m.s. * 12.011 * 10 * area) / large
+IPSL_ssp126_zmicro_num <- (IPSL_ssp126$zmicro.vint..mol.m.2. * 12.011 * 10 * area) / zmicro
+IPSL_ssp126_zmeso_num <- (IPSL_ssp126$zmeso.vint..mol.m.2. * 12.011 * 10 * area) / zmeso
+
+IPSL_ssp585_nano_num <- ((IPSL_ssp585$phyc.vint..mol.m.2. - IPSL_ssp585$phydiat.vint..mol.m.2.) * 12.011 * 10 * area) / nano
+IPSL_ssp585_lg_num <- (IPSL_ssp585$phydiat.vint..mol.m.s. * 12.011 * 10 * area) / large
+IPSL_ssp585_zmicro_num <- (IPSL_ssp585$zmicro.vint..mol.m.2. * 12.011 * 10 * area) / zmicro
+IPSL_ssp585_zmeso_num <- (IPSL_ssp585$zmeso.vint..mol.m.2. * 12.011 * 10 * area) / zmeso
+
+# Combine size classes for initial linear spectra
+GFDL_x <- log10(c(smallGFDL, largeGFDL, zmicro, zmeso))
+IPSL_x <- log10(c(nano, large, zmicro, zmeso))
+
+```
+
+In order to make sure that the spectra we create from the CMIP6 data match our therMizer simulations, we're going to load `mizer` and generate a parameter object.  This will allow us to use `w_full` for the x values in the new linear spectra.
+
+``` {r message = FALSE}
+
+library(mizer)
+
+# Load species parameters
+species_params <- read.csv('NPac_species_params.csv')
+
+# Load interaction matrix
+inter <- read.csv('inter_NPAC.csv', row.names = 1)
+inter <- as(inter, "matrix")
+
+# Create the params object 
+# Since we're not going to run mizer, we'll ignore the column about the selectivity function so we don't get an error
+params <- newMultispeciesParams(species_params[,1:14], interaction = inter, min_w_pp = 1e-14, no_w = 100, kappa = 1e12, w_pp_cutoff = 455400*1.1)
+
+```
+
+Now we can carry on with the CMIP6 data.
+
+``` {r}
+
+# Create arrays to fill
+GFDL_picon_out <- array(numeric(), c(2100-1950+1,length(params@w_full))) # years 1950 - 2100 by size
+GFDL_hist_out <- array(numeric(), c(2014-1950+1,length(params@w_full))) # years 1950 - 2014 by size
+GFDL_ssp126_out <- array(numeric(), c(2100-2015+1,length(params@w_full))) # years 2015 - 2100 by size
+GFDL_ssp585_out <- array(numeric(), c(2100-2015+1,length(params@w_full))) # years 2015 - 2100 by size
+
+IPSL_picon_out <- array(numeric(), c(2100-1950+1,length(params@w_full))) # years 1950 - 2100 by size
+IPSL_hist_out <- array(numeric(), c(2014-1950+1,length(params@w_full))) # years 1950 - 2014 by size
+IPSL_ssp126_out <- array(numeric(), c(2100-2015+1,length(params@w_full))) # years 2015 - 2100 by size
+IPSL_ssp585_out <- array(numeric(), c(2100-2015+1,length(params@w_full))) # years 2015 - 2100 by size
+
+# We're also going to save the slopes and intercept from the linear fits, because this information is helpful in ensuring we've come up with something reasonable.
+GFDL_picon_coefs <- array(numeric(), c(2100-1950+1,2)) # years 1950 - 2100 by 2 coefficients
+GFDL_hist_coefs <- array(numeric(), c(2014-1950+1,2)) # years 1950 - 2014 by 2 coefficients
+GFDL_ssp126_coefs <- array(numeric(), c(2100-2015+1,2)) # years 2015 - 2100 by 2 coefficients
+GFDL_ssp585_coefs <- array(numeric(), c(2100-2015+1,2)) # years 2015 - 2100 by 2 coefficients
+
+IPSL_picon_coefs <- array(numeric(), c(2100-1950+1,2)) # years 1950 - 2100 by 2 coefficients
+IPSL_hist_coefs <- array(numeric(), c(2014-1950+1,2)) # years 1950 - 2014 by 2 coefficients
+IPSL_ssp126_coefs <- array(numeric(), c(2100-2015+1,2)) # years 2015 - 2100 by 2 coefficients
+IPSL_ssp585_coefs <- array(numeric(), c(2100-2015+1,2)) # years 2015 - 2100 by 2 coefficients
+
+
+# Pre-industrial control runs
+for (t in seq(1950, 2100, 1)){
+  GFDL_picon_plankton <- log10(c(GFDL_picon_sm_num[t-1949], GFDL_picon_lg_num[t-1949], GFDL_picon_zmicro_num[t-1949], GFDL_picon_zmeso_num[t-1949]))
+  IPSL_picon_plankton <- log10(c(IPSL_picon_nano_num[t-1949], IPSL_picon_lg_num[t-1949], IPSL_picon_zmicro_num[t-1949], IPSL_picon_zmeso_num[t-1949]))
+  
+  # Calculate the sloes and intercept for ESM size range
+  GFDL_picon_lm <- lm(GFDL_picon_plankton ~ GFDL_x)
+  IPSL_picon_lm <- lm(IPSL_picon_plankton ~ IPSL_x)
+  
+  # Expand to full size range
+  full_x <- log10(params@w_full)
+  
+  GFDL_picon_out[t-1949,] <- GFDL_picon_lm$coefficients[2] * full_x + GFDL_picon_lm$coefficients[1]
+  IPSL_picon_out[t-1949,] <- IPSL_picon_lm$coefficients[2] * full_x + IPSL_picon_lm$coefficients[1]
+  
+  # Keep track of the coefficients for the linear model
+  GFDL_picon_coefs[t-1949,] <- GFDL_picon_lm$coefficients
+  IPSL_picon_coefs[t-1949,] <- IPSL_picon_lm$coefficients
+}
+
+# Historical runs
+for (t in seq(1950, 2014, 1)){
+  GFDL_hist_plankton <- log10(c(GFDL_hist_sm_num[t-1949], GFDL_hist_lg_num[t-1949], GFDL_hist_zmicro_num[t-1949], GFDL_hist_zmeso_num[t-1949]))
+  IPSL_hist_plankton <- log10(c(IPSL_hist_nano_num[t-1949], IPSL_hist_lg_num[t-1949], IPSL_hist_zmicro_num[t-1949], IPSL_hist_zmeso_num[t-1949]))
+  
+  # Calculate the sloes and intercept for ESM size range
+  GFDL_hist_lm <- lm(GFDL_hist_plankton ~ GFDL_x)
+  IPSL_hist_lm <- lm(IPSL_hist_plankton ~ IPSL_x)
+  
+  # Expand to full size range
+  full_x <- log10(params@w_full)
+  
+  GFDL_hist_out[t-1949,] <- GFDL_hist_lm$coefficients[2] * full_x + GFDL_hist_lm$coefficients[1]
+  IPSL_hist_out[t-1949,] <- IPSL_hist_lm$coefficients[2] * full_x + IPSL_hist_lm$coefficients[1]
+  
+  # Keep track of the coefficients for the linear model
+  GFDL_hist_coefs[t-1949,] <- GFDL_hist_lm$coefficients
+  IPSL_hist_coefs[t-1949,] <- IPSL_hist_lm$coefficients
+}
+
+# Projections
+for (t in seq(2015, 2100, 1)){
+  GFDL_ssp126_plankton <- log10(c(GFDL_ssp126_sm_num[t-2014], GFDL_ssp126_lg_num[t-2014], GFDL_ssp126_zmicro_num[t-2014], GFDL_ssp126_zmeso_num[t-2014]))
+  IPSL_ssp126_plankton <- log10(c(IPSL_ssp126_nano_num[t-2014], IPSL_ssp126_lg_num[t-2014], IPSL_ssp126_zmicro_num[t-2014], IPSL_ssp126_zmeso_num[t-2014]))
+  
+  GFDL_ssp585_plankton <- log10(c(GFDL_ssp585_sm_num[t-2014], GFDL_ssp585_lg_num[t-2014], GFDL_ssp585_zmicro_num[t-2014], GFDL_ssp585_zmeso_num[t-2014]))
+  IPSL_ssp585_plankton <- log10(c(IPSL_ssp585_nano_num[t-2014], IPSL_ssp585_lg_num[t-2014], IPSL_ssp585_zmicro_num[t-2014], IPSL_ssp585_zmeso_num[t-2014]))
+  
+  # Calculate the sloes and intercept for ESM size range
+  GFDL_ssp126_lm <- lm(GFDL_ssp126_plankton ~ GFDL_x)
+  IPSL_ssp126_lm <- lm(IPSL_ssp126_plankton ~ IPSL_x)
+  
+  GFDL_ssp585_lm <- lm(GFDL_ssp585_plankton ~ GFDL_x)
+  IPSL_ssp585_lm <- lm(IPSL_ssp585_plankton ~ IPSL_x)
+  
+  # Expand to full size range
+  full_x <- log10(params@w_full)
+  
+  GFDL_ssp126_out[t-2014,] <- GFDL_ssp126_lm$coefficients[2] * full_x + GFDL_ssp126_lm$coefficients[1]
+  IPSL_ssp126_out[t-2014,] <- IPSL_ssp126_lm$coefficients[2] * full_x + IPSL_ssp126_lm$coefficients[1]
+  
+  GFDL_ssp585_out[t-2014,] <- GFDL_ssp585_lm$coefficients[2] * full_x + GFDL_ssp585_lm$coefficients[1]
+  IPSL_ssp585_out[t-2014,] <- IPSL_ssp585_lm$coefficients[2] * full_x + IPSL_ssp585_lm$coefficients[1]
+
+  # Keep track of the coefficients for the linear model
+  GFDL_ssp126_coefs[t-2014,] <- GFDL_ssp126_lm$coefficients
+  IPSL_ssp126_coefs[t-2014,] <- IPSL_ssp126_lm$coefficients
+  
+  GFDL_ssp585_coefs[t-2014,] <- GFDL_ssp585_lm$coefficients
+  IPSL_ssp585_coefs[t-2014,] <- IPSL_ssp585_lm$coefficients
+
+}
+
+# Save for input into therMizer
+# Time dimension
+picon_times <- seq(1950,2100,1)
+hist_times <- seq(1950,2014,1)
+ssp_times <- seq(2015,2100,1)
+
+# Size dimension
+size <- params@w_full
+
+# Create appropriately defined arrays
+GFDL_picon_n_pp_array = array(NA, dim = c(length(picon_times), length(size)), dimnames = list(time = picon_times, w = size))
+GFDL_hist_n_pp_array = array(NA, dim = c(length(hist_times), length(size)), dimnames = list(time = hist_times, w = size))
+GFDL_ssp126_n_pp_array = array(NA, dim = c(length(ssp_times), length(size)), dimnames = list(time = ssp_times, w = size))
+GFDL_ssp585_n_pp_array = array(NA, dim = c(length(ssp_times), length(size)), dimnames = list(time = ssp_times, w = size))
+
+IPSL_picon_n_pp_array = array(NA, dim = c(length(picon_times), length(size)), dimnames = list(time = picon_times, w = size))
+IPSL_hist_n_pp_array = array(NA, dim = c(length(hist_times), length(size)), dimnames = list(time = hist_times, w = size))
+IPSL_ssp126_n_pp_array = array(NA, dim = c(length(ssp_times), length(size)), dimnames = list(time = ssp_times, w = size))
+IPSL_ssp585_n_pp_array = array(NA, dim = c(length(ssp_times), length(size)), dimnames = list(time = ssp_times, w = size))
+
+# Fill them
+GFDL_picon_n_pp_array[,] <- GFDL_picon_out[,]
+GFDL_hist_n_pp_array[,] <- GFDL_hist_out[,]
+GFDL_ssp126_n_pp_array[,] <- GFDL_ssp126_out[,]
+GFDL_ssp585_n_pp_array[,] <- GFDL_ssp585_out[,]
+
+IPSL_picon_n_pp_array[,] <- IPSL_picon_out[,]
+IPSL_hist_n_pp_array[,] <- IPSL_hist_out[,]
+IPSL_ssp126_n_pp_array[,] <- IPSL_ssp126_out[,]
+IPSL_ssp585_n_pp_array[,] <- IPSL_ssp585_out[,]
+
+# Concatonate historical runs and projections
+GFDL_CCscenario_126 <- rbind(GFDL_hist_n_pp_array, GFDL_ssp126_n_pp_array)
+GFDL_CCscenario_585 <- rbind(GFDL_hist_n_pp_array, GFDL_ssp585_n_pp_array)
+
+IPSL_CCscenario_126 <- rbind(IPSL_hist_n_pp_array, IPSL_ssp126_n_pp_array)
+IPSL_CCscenario_585 <- rbind(IPSL_hist_n_pp_array, IPSL_ssp585_n_pp_array)
+
+# Let's create some plots to make sure things look reasonable
+plot(picon_times, GFDL_picon_coefs[,1], type = "l", col = "black", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(hist_times, GFDL_hist_coefs[,1], type = "l", col = "grey", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, GFDL_ssp126_coefs[,1], type = "l", col = "cyan", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, GFDL_ssp585_coefs[,1], type = "l", col = "blue", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = "Intercept")
+
+plot(picon_times, IPSL_picon_coefs[,1], type = "l", col = "black", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(hist_times, IPSL_hist_coefs[,1], type = "l", col = "grey", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, IPSL_ssp126_coefs[,1], type = "l", col = "cyan", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, IPSL_ssp585_coefs[,1], type = "l", col = "blue", xlim = c(1950, 2100), ylim = c(13.5,14.5), xlab = " ", ylab = "Intercept")
+
+plot(picon_times, GFDL_picon_coefs[,2], type = "l", col = "black", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(hist_times, GFDL_hist_coefs[,2], type = "l", col = "grey", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, GFDL_ssp126_coefs[,2], type = "l", col = "cyan", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, GFDL_ssp585_coefs[,2], type = "l", col = "blue", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = "Slope")
+
+plot(picon_times, IPSL_picon_coefs[,2], type = "l", col = "black", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(hist_times, IPSL_hist_coefs[,2], type = "l", col = "grey", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, IPSL_ssp126_coefs[,2], type = "l", col = "cyan", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(ssp_times, IPSL_ssp585_coefs[,2], type = "l", col = "blue", xlim = c(1950, 2100), ylim = c(-1.1,-0.9), xlab = " ", ylab = "Slope")
+
+```
+That looks alright.  And remarkably similar across both models...  Let's also plot the size spectra.
+
+``` {r}
+
+# Plot spectra, looping through time steps
+for (t in seq(1950,2099,1)){
+  plot(log10(size), GFDL_picon_n_pp_array[t-1949,], type = "l", col = "black", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+  plot(log10(size), GFDL_CCscenario_126[t-1949,], type = "l", col = "cyan", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+  plot(log10(size), GFDL_CCscenario_585[t-1949,], type = "l", col = "blue", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+}
+plot(log10(size), GFDL_picon_n_pp_array[2100-1949,], type = "l", col = "black", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(log10(size), GFDL_CCscenario_126[2100-1949,], type = "l", col = "cyan", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(log10(size), GFDL_CCscenario_585[2100-1949,], type = "l", col = "blue", xlim = c(-14,6), ylim = c(0,40), xlab = expression('log'[10]*'(size)'), ylab = expression('log'[10]*'(abundance)'))
+
+for (t in seq(1950,2099,1)){
+  plot(log10(size), IPSL_picon_n_pp_array[t-1949,], type = "l", col = "black", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+  plot(log10(size), IPSL_CCscenario_126[t-1949,], type = "l", col = "cyan", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+  plot(log10(size), IPSL_CCscenario_585[t-1949,], type = "l", col = "blue", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+  par(new = TRUE)
+}
+plot(log10(size), IPSL_picon_n_pp_array[2100-1949,], type = "l", col = "black", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(log10(size), IPSL_CCscenario_126[2100-1949,], type = "l", col = "cyan", xlim = c(-14,6), ylim = c(0,40), xlab = " ", ylab = " ")
+par(new = TRUE)
+plot(log10(size), IPSL_CCscenario_585[2100-1949,], type = "l", col = "blue", xlim = c(-14,6), ylim = c(0,40), xlab = expression('log'[10]*'(size)'), ylab = expression('log'[10]*'(abundance)'))
+
+```
+
+That looks alright, too.  Let's save the files.
+
+```{r}
+
+write.table(GFDL_picon_n_pp_array, file = "GFDL_n_pp_array_PIcontrol.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(GFDL_hist_n_pp_array, file = "GFDL_n_pp_array_hist.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(GFDL_ssp126_n_pp_array, file = "GFDL_n_ppp_array_ssp126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(GFDL_ssp585_n_pp_array, file = "GFDL_n_pp_array_ssp585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(GFDL_CCscenario_126, file = "GFDL_n_pp_array_CCscenario_126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(GFDL_CCscenario_585, file = "GFDL_n_pp_array_CCscenario_585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+
+write.table(IPSL_picon_n_pp_array, file = "IPSL_n_pp_array_PIcontrol.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(IPSL_hist_n_pp_array, file = "IPSL_n_pp_array_hist.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(IPSL_ssp126_n_pp_array, file = "IPSL_n_ppp_array_ssp126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(IPSL_ssp585_n_pp_array, file = "IPSL_n_pp_array_ssp585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(IPSL_CCscenario_126, file = "IPSL_n_pp_array_CCscenario_126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(IPSL_CCscenario_585, file = "IPSL_n_pp_array_CCscenario_585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+
+```

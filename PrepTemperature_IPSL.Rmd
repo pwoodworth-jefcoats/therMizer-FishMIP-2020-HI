@@ -1,0 +1,107 @@
+---
+title: "PrepTemperature_IPSL"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/13/2020"
+output: 
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to create time series of temperature for the therMizer FishMIP runs.  There are four climate scenarios:
+* picontrol: pre-industrial climate as simulated by the Earth System Models (ESMs)
+* historical: historical climate as simulated by the ESMs, starting in 1950
+* ssp126: SSP1-RCP2.6 climate as simulated by the ESMs
+* ssp585" SSP5-RCP8.5 climate as simulated by the ESMs
+and both ssp126 and ssp585 will be appended to historical.  Note that only the years 1950 - 2100 are needed.
+
+## Ocean Temperature
+
+To facilitate comparison with the previous FishMIP simulations, we'll use the same approach: annual data, with surface and bottom temperatures averaged for all species except mahi, wahoo, blue marlin, and striped marlin (for which we'll use only surface temperatures).  Time-permitting, it would be worthwhile to use species-specific depth-averaged temperatures is in [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full) and compare the results.  Likewise for monthly data.
+
+```{r}
+### Load IPSL-CM6A-LR data
+picon <- read.csv('Hawaii_IPSL-CM6A-LR_picontrol_annual_1601_2100.csv', header = TRUE)
+hist <- read.csv('Hawaii_IPSL-CM6A-LR_historical_annual_1850_2014.csv', header = TRUE)
+ssp126 <- read.csv('Hawaii_IPSL-CM6A-LR_ssp126_annual_2015_2100.csv', header = TRUE)
+ssp585 <- read.csv('Hawaii_IPSL-CM6A-LR_ssp585_annual_2015_2100.csv', header = TRUE)
+
+# Create array and fill 
+picon_out <- array(numeric(), c(2100-1950+1,12)) # years 1950 - 2100 by 12 species
+hist_out <- array(numeric(), c(2014-1950+1,12)) # years 1950 - 2014 by 12 species
+ssp126_out <- array(numeric(), c(2100-2015+1,12)) # years 2015 - 2100 by 12 species
+ssp585_out <- array(numeric(), c(2100-2015+1,12)) # years 2015 - 2100 by 12 species
+
+# Identify the years of interest
+picon_yrs <- which(picon$Date..yyyy. >= 1950)
+hist_yrs <- which(hist$Date..yyyy. >= 1950)
+
+# Loop through the 12 species in the Hawaii longline simulation
+for (s in seq(1,12,1)) {
+  # Based on how species are ordered in the model parameter table, 
+  # species 2 (Mahi), 7 (StripedMarin), 8 (Wahoo), and 10 (BlueMarlin)
+  # will be affected by surface temperature only
+  # whereas the others will experience the water column average
+	if (s == 2 | s == 7 | s == 8 | s == 10) {
+		picon_out[,s] <- picon$tos..degC.[picon_yrs]
+		hist_out[,s] <- hist$tos..degC.[hist_yrs]
+		ssp126_out[,s] <- ssp126$tos..degC.
+		ssp585_out[,s] <- ssp585$tos..degC.
+	} else {
+		picon_out[,s] <- ((picon$tos..degC.[picon_yrs] + picon$tob..degC.[picon_yrs]) / 2)
+		hist_out[,s] <- ((hist$tos..degC.[hist_yrs] + hist$tob..degC.[hist_yrs]) / 2)
+		ssp126_out[,s] <- ((ssp126$tos..degC. + ssp126$tob..degC.) / 2)
+		ssp585_out[,s] <- ((ssp585$tos..degC. + ssp585$tob..degC.) / 2)
+	}
+}		
+### Save output for input into mizerNPAC
+picon_times <- seq(1950,2100,1)
+hist_times <- seq(1950,2014,1)
+ssp126_times <- seq(2015,2100,1)
+ssp585_times <- seq(2015,2100,1)
+
+realm_names <- c("Bigeye","Mahi","BlueShark","Skipjack","Yellowfin","Albacore","StripedMarlin","Wahoo","Swordfish","BlueMarlin","Lancetfish","Opah") # to match case with therMizer parameters
+
+picon_ocean_temp_array <- array(NA, dim = c(length(picon_times), length(realm_names)), dimnames = list(time = picon_times, realm = realm_names))
+
+hist_ocean_temp_array <- array(NA, dim = c(length(hist_times), length(realm_names)), dimnames = list(time = hist_times, realm = realm_names))
+
+ssp126_ocean_temp_array <- array(NA, dim = c(length(ssp126_times), length(realm_names)), dimnames = list(time = ssp126_times, realm = realm_names))
+
+ssp585_ocean_temp_array <- array(NA, dim = c(length(ssp585_times), length(realm_names)), dimnames = list(time = ssp585_times, realm = realm_names))
+
+picon_ocean_temp_array[,] <- picon_out[,]
+hist_ocean_temp_array[,] <- hist_out[,]
+ssp126_ocean_temp_array[,] <- ssp126_out[,]
+ssp585_ocean_temp_array[,] <- ssp585_out[,]
+
+# Concatonate historical and climate change scenarios
+CCscenario_126 <- rbind(hist_ocean_temp_array,ssp126_ocean_temp_array)
+CCscenario_585 <- rbind(hist_ocean_temp_array,ssp585_ocean_temp_array)
+
+# Plot to check
+for (s in seq(1,11,1)){
+  plot(picon_times, picon_ocean_temp_array[,s], type= "l", col = "black", xlab = " ", ylab = " ", xlim = c(1950,2100), ylim = c(0,35))
+  par(new = TRUE)
+  plot(picon_times, CCscenario_126[,s], type= "l", col = "cyan", xlab = " ", ylab = " ", xlim = c(1950,2100), ylim = c(0,35))
+  par(new = TRUE)
+  plot(picon_times, CCscenario_585[,s], type= "l", col = "blue", xlab = " ", ylab = " ", xlim = c(1950,2100), ylim = c(0,35))
+  par(new = TRUE)
+}
+plot(picon_times, picon_ocean_temp_array[,12], type = "l", col = "black", xlab = "Year", ylab = "Deg C", xlim = c(1950,2100), ylim = c(0,35))
+par(new = TRUE)
+plot(picon_times, CCscenario_126[,12], type = "l", col = "cyan", xlab = " ", ylab = " ", xlim = c(1950,2100), ylim = c(0,35))
+par(new = TRUE)
+plot(picon_times, CCscenario_585[,12], type = "l", col = "blue", xlab = " ", ylab = " ", xlim = c(1950,2100), ylim = c(0,35))
+
+write.table(picon_ocean_temp_array, file = "IPSL_ocean_temp_array_PIcontrol.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(hist_ocean_temp_array, file = "IPSL_ocean_temp_array_hist.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(ssp126_ocean_temp_array, file = "IPSL_ocean_temp_array_ssp126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(ssp585_ocean_temp_array, file = "IPSL_ocean_temp_array_ssp585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(CCscenario_126, file = "IPSL_ocean_temp_array_CCscenario_126.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+write.table(CCscenario_585, file = "IPSL_ocean_temp_array_CCscenario_585.dat", quote = FALSE, row.names = TRUE, col.names = TRUE)
+
+```

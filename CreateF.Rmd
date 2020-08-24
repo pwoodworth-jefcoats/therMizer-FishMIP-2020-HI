@@ -1,0 +1,61 @@
+---
+title: "CreateF"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/12/2020"
+output: 
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to create time series of F for the therMizer FishMIP runs.  There are three fishing scenarios:
+* histsoc: varying direct human influences in the historical period (1950-2014) (i.e., historical estimates of fishing effort)
+* 2015soc: fixed year-2015 direct human influences (i.e., fishing effort)
+* nat: no fishing (naturalized run)
+and the histsoc and 2015soc scenarios will be appended
+
+## Fishing Mortality
+Fishing mortality in 2015 will be set at 0.2 for all species in keeping with [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full).  While fishing effort in Hawaii's deep-set longline fishery increased linearly by a factor of five from 1995 - 2015 ([Woodworth-Jefcoats et al. 2018](https://spo.nmfs.noaa.gov/content/fishery-bulletin/synergy-among-oceanographic-variability-fishery-expansion-and-longline)), we'll use the more conservative scenario in [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full) and say that fishing mortality doubled over this time, going from 0.1 to 0.2. 
+
+$$
+\frac{0.2}{5} \times \frac{5}{2} = 0.01
+$$
+
+[Ward and Myers 2005](https://esajournals.onlinelibrary.wiley.com/doi/10.1890/03-0746) note that observed longline fishing effort increased from 0.302 million hooks in the 1950s to 1.103 million hooks in the 1990s, or by a factor of 3.65.  We'll scale this in the same way the above increase in effort was scaled.  Therefore, fishing mortality will increase linearly (for lack of intervening data) from 0.07 in 1950 to 0.1 in 1995.
+
+$$
+\frac{0.1}{3.65} \times \frac{5}{2} = 0.07
+$$
+
+```{r}
+# We'll do this in three pieces that don't exactly match the scenarios:
+# 1950 - 1995 (when F is increasing slowly), 1995 - 2015 (when F increases more quickly), and 2016 - 2100 (when F is constant)
+
+years_1 <- seq(1950, 1995, 1)
+Fmort_1 <- seq(0.07, 0.1, length.out = length(years_1))
+
+years_2 <- seq(1995, 2015, 1)
+Fmort_2 <- seq(0.1, 0.2, length.out = length(years_2))
+
+years_3 <- seq(2016, 2100, 1)
+Fmort_3 <- rep(0.2, length.out = length(years_3))
+
+# Combine time series, taking care not to duplicate 1995
+years <- c(years_1, years_2[2:length(years_2)], years_3)
+Fmort <- c(Fmort_1, Fmort_2[2:length(Fmort_2)], Fmort_3)
+
+# Plot to check that things worked correctly
+plot(years, Fmort, type = "l")
+
+```
+```{r}
+
+# Save output
+
+FishingEffort <- cbind(years, Fmort)
+write.table(FishingEffort, file = "FishingEffort.dat", quote = FALSE, sep = " ", row.names = FALSE, col.names = FALSE)
+
+```

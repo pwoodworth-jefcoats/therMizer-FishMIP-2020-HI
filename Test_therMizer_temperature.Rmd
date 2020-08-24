@@ -1,0 +1,374 @@
+---
+title: "Test_therMizer_temperature"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/17/2020"
+output:
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to test ther therMizer extension for FishMIP using only temperature and fishing input.  This is so that the mizer resource spectra and feeding levels can be examined and the CMIP6 plankton forcing scaled appropriately (if necessary).
+
+## Load libraries
+Mizer 2.0.3 or later version is needed to use the extension. 
+
+```{r message = FALSE, warning = FALSE}
+library(mizer)
+```
+
+## Set up multispecies model 
+For the FishMIP simulations, we'll be using the species parameters in [Woodworth-Jefcoats et al. 2019](https://www.frontiersin.org/articles/10.3389/fmars.2019.00383/full).  We'll also follow their implemetation of fishing mortality, so will need to create a selectivity function which we'll call `knife_edge_phased`.
+
+```{r message = FALSE, warning = FALSE}
+
+# Create the selectivity function:
+
+#' Size based knife-edge selectivity function that is phased in 
+#'
+#' A knife-edge selectivity function where only sizes greater or equal to
+#' \code{knife_edge_size1} are selected.  Selectivity is then phased in through
+#' size \code{knife_edge_size2}.  This simulates the reduced effectiveness of 
+#' longline gear for smaller fish
+#'
+#' @param w The size of the individual.
+#' @param knife_edge_size1 The size at which the knife-edge is initiated.
+#' @param knife_edge_size2 The size at which selectivity is fully realized.
+#' @export
+knife_edge_phased <- function(w, knife_edge_size1, knife_edge_size2, ...) { 
+	sel <- rep(0, length(w)) 
+	
+	# Phased in linearly
+	F0 <- which(w < knife_edge_size1) # to find one size smaller than that fished, for the 0 value 
+	F1 <- which(w < knife_edge_size2) # to find end of escalation size range 
+	lo_sel <- max(F0):max(F1) 
+	sel[lo_sel] <- seq(0, 1, length = length(lo_sel)) # linear increase from 0 to F 
+	sel[w >= knife_edge_size2] <- 1 
+	return(sel) 
+	
+} 
+
+# Load species parameters
+species_params <- read.csv('NPac_species_params.csv')
+
+# Load interaction matrix
+inter <- read.csv('inter_NPAC.csv', row.names = 1)
+inter <- as(inter, "matrix")
+
+# Create the params object
+params <- newMultispeciesParams(species_params, interaction = inter, min_w_pp = 1e-14, no_w = 100, kappa = 1e12, w_pp_cutoff = 455400*1.1)
+
+# Run a projection to make sure the selectivity function is working
+sim <- project(params, t_max = 500, effort = 0.1)
+plot(sim)
+
+```
+
+Excellent!  Things are working.  Let's test the FishMIP fishing scenarios:  
+
+* nat: no fishing (naturalized run, 1950 - 2100)  
+* histsoc: varying direct human influences in the historical period (1950-2014) (i.e., historical estimates of fishing effort)  
+* 2015soc: fixed year-2015 direct human influences (2015 - 2100) (i.e., fishing effort)  
+
+Note that the histsoc and 2015soc scenarios will be concatonated.
+
+## Test FishMIP fishing scenarios, without climate data
+
+In this section, we'll test the two FishMIP fishing scenarios.  The time series of fishing mortality, "FishingEffort.dat" was created with "CreateF.Rmd".  We're also going to create another time series with F = 0 so that we can use the same years for all our scenarios.  This makes incorporating the temperature functions easier later on because all the time values will agree.
+
+```{r message = FALSE, warning = FALSE}
+
+# Load fishing scenario
+effort_Fvar <- read.table("FishingEffort.dat", sep = " ")
+effort_Fvar <- effort_Fvar[,2] # Column 1 = year, which we won't need
+effort_Fvar <- as(effort_Fvar, "matrix")
+
+# Build fishing effort arrays
+# Since we're following the approach of Woodworth-Jefcoats et al. 2019, we'll begin the model with 600 years of constant input for spinup.  This means the first year will be 1350 (1950 - 600).
+times <- seq(1350, 2100, by = 1)
+gear_names <- c("Longline")
+effort_array_Fvar <- array(NA, dim = c(length(times), length(gear_names)), dimnames = list(time = times, gear = gear_names))
+effort_array_F0 <- array(NA, dim = c(length(times), length(gear_names)), dimnames = list(time = times, gear = gear_names))
+
+# Now fill the array
+# Remember, the first 600 years are for spin-up.
+# During this time, the first input value is repeated at each time step.
+for (t in (times-1349)){
+	if (t <= 601){ 
+		effort_array_Fvar[t,"Longline"] <- effort_Fvar[1]
+		effort_array_F0[t,"Longline"] <- 0
+	} else {
+		effort_array_Fvar[t,"Longline"] <- effort_Fvar[t-600]
+		effort_array_F0[t,"Longline"] <- 0
+		}
+}
+
+# Run two simulations:
+# No effort
+# FishMIP effort
+sim_F0 <- project(params, t_max = length(times), effort = effort_array_F0)
+plot(sim_F0)
+
+sim_Fonly <- project(params, t_max = length(times), effort = effort_array_Fvar)
+plot(sim_Fonly)
+
+```
+
+That looks good.  Now we can move to incorporating temperature.
+
+## Load temperature data
+
+Before we crate the temperature functions, we'll load in the FishMIP temperature forcing.  
+There are four climate scenarios:  
+
+* picontrol: pre-industrial climate as simulated by the Earth System Models (ESMs)  
+* historical: historical climate as simulated by the ESMs, starting in 1950  
+* ssp126: SSP1-RCP2.6 climate as simulated by the ESMs  
+* ssp585" SSP5-RCP8.5 climate as simulated by the ESMs  
+
+and both ssp126 and ssp585 will be appended to historical.  Note that only the years 1950 - 2100 are needed.  These were created with "PrepTemperature_GFDL.Rmd" and "PrepTemperature_IPSL.Rmd".  
+
+```{r message = FALSE, warning = FALSE}
+
+# Load data for each CMIP6 model: GFDL-ESM4 and IPSL-CM6A-LR
+GFDL_temperature_PIcontrol <- read.table("GFDL_ocean_temp_array_PIcontrol.dat")
+GFDL_temperature_CC126 <- read.table("GFDL_ocean_temp_array_CCscenario_126.dat")
+GFDL_temperature_CC585 <- read.table("GFDL_ocean_temp_array_CCscenario_585.dat")
+
+IPSL_temperature_PIcontrol <- read.table("IPSL_ocean_temp_array_PIcontrol.dat")
+IPSL_temperature_CC126 <- read.table("IPSL_ocean_temp_array_CCscenario_126.dat")
+IPSL_temperature_CC585 <- read.table("IPSL_ocean_temp_array_CCscenario_585.dat")
+
+GFDL_temperature_PIcontrol <- as(GFDL_temperature_PIcontrol, "matrix")
+GFDL_temperature_CC126 <- as(GFDL_temperature_CC126, "matrix")
+GFDL_temperature_CC585 <- as(GFDL_temperature_CC585, "matrix")
+
+IPSL_temperature_PIcontrol <- as(IPSL_temperature_PIcontrol, "matrix")
+IPSL_temperature_CC126 <- as(IPSL_temperature_CC126, "matrix")
+IPSL_temperature_CC585 <- as(IPSL_temperature_CC585, "matrix")
+
+# Build temperature arrays following methods used above
+species <- params@species_params$species
+ocean_temp_array_GFDL_PIcontrol <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+ocean_temp_array_GFDL_CC126 <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+ocean_temp_array_GFDL_CC585 <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+ocean_temp_array_IPSL_PIcontrol <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+ocean_temp_array_IPSL_CC126 <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+ocean_temp_array_IPSL_CC585 <- array(NA, dim = c(length(times), length(species)), dimnames = list(time = times, sp = species))
+
+for (t in (times-1349)){
+	if (t <= 601){ 
+		ocean_temp_array_GFDL_PIcontrol[t,] <- GFDL_temperature_PIcontrol[1,]
+		ocean_temp_array_GFDL_CC126[t,] <- GFDL_temperature_CC126[1,]
+		ocean_temp_array_GFDL_CC585[t,] <- GFDL_temperature_CC585[1,]
+		ocean_temp_array_IPSL_PIcontrol[t,] <- IPSL_temperature_PIcontrol[1,]
+		ocean_temp_array_IPSL_CC126[t,] <- IPSL_temperature_CC126[1,]
+		ocean_temp_array_IPSL_CC585[t,] <- IPSL_temperature_CC585[1,]
+	} else {
+		ocean_temp_array_GFDL_PIcontrol[t,] <- GFDL_temperature_PIcontrol[t-600]
+		ocean_temp_array_GFDL_CC126[t,] <- GFDL_temperature_CC126[t-600]
+		ocean_temp_array_GFDL_CC585[t,] <- GFDL_temperature_CC585[t-600]
+		ocean_temp_array_IPSL_PIcontrol[t,] <- IPSL_temperature_PIcontrol[t-600]
+		ocean_temp_array_IPSL_CC126[t,] <- IPSL_temperature_CC126[t-600]
+		ocean_temp_array_IPSL_CC585[t,] <- IPSL_temperature_CC585[t-600]
+		}
+}
+
+```
+
+## Create the parameters that are derived from user-input parameters
+
+To scale the effect of temperature on encounter rate to a value ranging from 0 - 1, it is necessary to divide by the maximum possible value for each species.  To scale the effect of temperature on metabolism to a value ranging from 0 - 1, it is necessary to subtract the minimum vaule for each species and then divide by the range.  This requires a bit of straightforward arithmetic, and users could do this on their end if they're so inclined.  These parameters handle that math so the user doesn't have to.
+
+We're also going to create a parameter called `t_idx` that will help with the simulations.  This parameter will provide the correct time index for temperature during the simulations.
+
+```{r message = FALSE, warning = FALSE}
+
+params@species_params$encounter_scale <- rep(NA, length(params@species_params$temp_min))
+
+for (indv in seq(1:length(params@species_params$temp_min))){
+  
+  # Create a vector of all temperatures each species might encounter
+  temperature <- seq(params@species_params$temp_min[indv], params@species_params$temp_max[indv], by=0.1)
+  
+  # Find the maximum value of the unscaled effect of temperature on encounter rate for each species 
+  params@species_params$encounter_scale[indv] <- max((temperature) * (temperature - params@species_params$temp_min[indv]) * (params@species_params$temp_max[indv] - temperature))
+}
+
+# Determine the minimum, maximum, and range of value for the effect of temperature on metabolism
+min_metab_value <- (exp(25.22 - (0.63/((8.62e-5)*(273+params@species_params$temp_min)))))
+max_metab_value <- (exp(25.22 - (0.63/((8.62e-5)*(273+params@species_params$temp_max)))))
+		
+params@species_params$metab_min <- min_metab_value
+params@species_params$metab_range <- max_metab_value - min_metab_value
+		
+# Time indexing parameter
+# This will be added to t to convert the year into an index for the ocean_temp array
+if (min(times) == 0) {
+  other_params(params)$t_idx = 1
+} else if (min(times) == 1) {
+  other_params(params)$t_idx = 0
+} else {
+  other_params(params)$t_idx = -(min(times) - 1)
+}
+  
+		
+```
+
+## Create the new rate functions
+
+Temperature will be added to the fuctions to determine encounter rate and energy available for growth and reproduction.
+
+To scale encounter rate with temperature, we're essentially taking a temperature-dependent proportion of the value calculated by the mizerEncounter function.  If species are at their thermal optimum, we take the full value.  Elsewhere in their thermal range, we take a proportion that goes to zero at the limits of species' thermal tolerence.  
+
+```{r message = FALSE, warning = FALSE}
+
+therMizerEncounter <- function(params, n, n_pp, n_other, t, ...) {
+      
+      # Access the correct element
+      temp_at_t <- params@other_params$other$ocean_temp[t + params@other_params$other$t_idx,]
+      
+      # Calculate unscaled temperature effect using a generic polynomial rate equation
+      unscaled_temp_effect <- temp_at_t * (temp_at_t - params@species_params$temp_min) * (params@species_params$temp_max - temp_at_t)
+      
+      # Scale using new parameter
+      scaled_temp_effect <- unscaled_temp_effect / params@species_params$encounter_scale
+      
+      # Set the encounter rate to zero if temperature is outside species' thermal tolerance
+      above_max <- which(temp_at_t > params@species_params$temp_max)
+      below_min <- which(temp_at_t < params@species_params$temp_min)
+      
+      if(length(above_max) > 0)
+        scaled_temp_effect[above_max] = 0
+      
+      if(length(below_min) > 0)
+        scaled_temp_effect[below_min] = 0
+      
+      # Calculate maximum possible encounter rate
+      max_encounter <- mizerEncounter(params, n = n, n_pp = n_pp, n_other = n_other, ...)
+      
+      # Apply temperature effect
+      # return(sweep(max_encounter, 1, scaled_temp_effect, '*', check.margin = FALSE))
+      return(max_encounter*scaled_temp_effect)
+      
+}
+
+```
+
+To calculate the effect of temperature on metabolim, we use an Arrhenius function to scale the cost of metabolism.  When species are at their thermal maximum, the cost of metabolism is at its maximum.  When species are at their thermal minimum, the cost of metabolism is at its minimum
+
+```{r message = FALSE, warning = FALSE}
+
+therMizerEReproAndGrowth <- function(params, n, n_pp, n_other, t, encounter,
+                                 feeding_level, ...) {
+    
+    # Access the correct element
+    temp_at_t <- params@other_params$other$ocean_temp[t + params@other_params$other$t_idx,]
+    
+    # Arrhenius equation
+    unscaled_temp_effect <- (exp(25.22 - (0.63/((8.62e-5)*(273+temp_at_t)))))
+      
+    # Arrhenius equation scaled to a value between 0 and 1
+		temp_effect_metabolism <- (unscaled_temp_effect - params@species_params$metab_min) / params@species_params$metab_range
+		
+		# Set the EReproAndGrowth to zero if temperature is outside species' thermal tolerance
+    Emultiplier <- rep(1, length(params@species_params$species))
+		
+		above_max <- which(temp_at_t > params@species_params$temp_max)
+    below_min <- which(temp_at_t < params@species_params$temp_min)
+    
+    if(length(above_max) > 0)
+      Emultiplier[above_max] = 0
+    
+    if(length(below_min) > 0)
+      Emultiplier[below_min] = 0
+  
+		# Apply scaled Arrhenius value to metabolism
+    (sweep((1 - feeding_level) * encounter, 1,
+               params@species_params$alpha, "*", check.margin = FALSE) - 
+      params@metab*temp_effect_metabolism)*Emultiplier  
+      
+}
+
+```
+
+## Update the functions
+
+Replacing mizer's `Encounter` and `EReproAndGrowth` functions with the therMizer extension functions
+
+```{r message = FALSE, warning = FALSE}
+
+params <- setRateFunction(params, "Encounter", "therMizerEncounter")
+params <- setRateFunction(params, "EReproAndGrowth", "therMizerEReproAndGrowth")
+
+```
+
+## Run the simulations
+
+Because temperature is a parameter, we'll need to make unique `params` objects for each model and climate scenarios.  This means we'll have six new `params` objects (2 models x 3 climate scenarios).
+
+```{r message = FALSE, warning = FALSE}
+
+# Create parameter objects
+params_GFDL_PI <- params
+params_GFDL_CC126 <- params
+params_GFDL_CC585 <- params
+
+params_IPSL_PI <- params
+params_IPSL_CC126 <- params
+params_IPSL_CC585 <- params
+
+# Attach temperature
+other_params(params_GFDL_PI)$ocean_temp <- ocean_temp_array_GFDL_PIcontrol
+other_params(params_GFDL_CC126)$ocean_temp <- ocean_temp_array_GFDL_CC126
+other_params(params_GFDL_CC585)$ocean_temp <- ocean_temp_array_GFDL_CC585
+
+other_params(params_IPSL_PI)$ocean_temp <- ocean_temp_array_IPSL_PIcontrol
+other_params(params_IPSL_CC126)$ocean_temp <- ocean_temp_array_IPSL_CC126
+other_params(params_IPSL_CC585)$ocean_temp <- ocean_temp_array_IPSL_CC585
+
+```
+
+Now we can run the simulations.  There are 12 runs here: 3 climate scenarios x 2 fishing scenarios x 2 CMIP6 models.
+
+```{r message = FALSE, warning = FALSE}
+sim_GFDL_PI_F0 <- project(params_GFDL_PI, t_max = length(times), effort = effort_array_F0)
+sim_GFDL_CC126_F0 <- project(params_GFDL_CC126, t_max = length(times), effort = effort_array_F0)
+sim_GFDL_CC585_F0 <- project(params_GFDL_CC585, t_max = length(times), effort = effort_array_F0)
+
+sim_IPSL_PI_F0 <- project(params_IPSL_PI, t_max = length(times), effort = effort_array_F0)
+sim_IPSL_CC126_F0 <- project(params_IPSL_CC126, t_max = length(times), effort = effort_array_F0)
+sim_IPSL_CC585_F0 <- project(params_IPSL_CC585, t_max = length(times), effort = effort_array_F0)
+
+sim_GFDL_PI_Fvar <- project(params_GFDL_PI, t_max = length(times), effort = effort_array_Fvar)
+sim_GFDL_CC126_Fvar <- project(params_GFDL_CC126, t_max = length(times), effort = effort_array_Fvar)
+sim_GFDL_CC585_Fvar <- project(params_GFDL_CC585, t_max = length(times), effort = effort_array_Fvar)
+
+sim_IPSL_PI_Fvar <- project(params_IPSL_PI, t_max = length(times), effort = effort_array_Fvar)
+sim_IPSL_CC126_Fvar <- project(params_IPSL_CC126, t_max = length(times), effort = effort_array_Fvar)
+sim_IPSL_CC585_Fvar <- project(params_IPSL_CC585, t_max = length(times), effort = effort_array_Fvar)
+
+```
+
+Take a look at plots for each scenario.
+
+```{r message = FALSE, warning  = FALSE}
+
+plot(sim_GFDL_PI_F0)
+plot(sim_GFDL_CC126_F0)
+plot(sim_GFDL_CC585_F0)
+plot(sim_IPSL_PI_F0)
+plot(sim_IPSL_CC126_F0)
+plot(sim_IPSL_CC585_F0)
+plot(sim_GFDL_PI_Fvar)
+plot(sim_GFDL_CC126_Fvar)
+plot(sim_GFDL_CC585_Fvar)
+plot(sim_IPSL_PI_Fvar)
+plot(sim_IPSL_CC126_Fvar)
+plot(sim_IPSL_CC585_Fvar)
+
+```
+
