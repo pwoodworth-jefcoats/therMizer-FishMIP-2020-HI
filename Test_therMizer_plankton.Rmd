@@ -142,12 +142,12 @@ for (t in (times-1349)){
 		n_pp_array_IPSL_CC126[t,] <- (10^(IPSL_n_pp_CC126[1,]))/params@dw_full
 		n_pp_array_IPSL_CC585[t,] <- (10^(IPSL_n_pp_CC585[1,]))/params@dw_full
 	} else {
-		n_pp_array_GFDL_PIcontrol[t,] <- (10^(GFDL_n_pp_PIcontrol[t-600]))/params@dw_full
-		n_pp_array_GFDL_CC126[t,] <- (10^(GFDL_n_pp_CC126[t-600]))/params@dw_full
-		n_pp_array_GFDL_CC585[t,] <- (10^(GFDL_n_pp_CC585[t-600]))/params@dw_full
-		n_pp_array_IPSL_PIcontrol[t,] <- (10^(IPSL_n_pp_PIcontrol[t-600]))/params@dw_full
-		n_pp_array_IPSL_CC126[t,] <- (10^(IPSL_n_pp_CC126[t-600]))/params@dw_full
-		n_pp_array_IPSL_CC585[t,] <- (10^(IPSL_n_pp_CC585[t-600]))/params@dw_full
+		n_pp_array_GFDL_PIcontrol[t,] <- (10^(GFDL_n_pp_PIcontrol[t-600,]))/params@dw_full
+		n_pp_array_GFDL_CC126[t,] <- (10^(GFDL_n_pp_CC126[t-600,]))/params@dw_full
+		n_pp_array_GFDL_CC585[t,] <- (10^(GFDL_n_pp_CC585[t-600,]))/params@dw_full
+		n_pp_array_IPSL_PIcontrol[t,] <- (10^(IPSL_n_pp_PIcontrol[t-600,]))/params@dw_full
+		n_pp_array_IPSL_CC126[t,] <- (10^(IPSL_n_pp_CC126[t-600,]))/params@dw_full
+		n_pp_array_IPSL_CC585[t,] <- (10^(IPSL_n_pp_CC585[t-600,]))/params@dw_full
 		}
 }
 
