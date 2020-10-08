@@ -1,0 +1,414 @@
+---
+title: "prep_therMizer_output_netCDF"
+author: "Phoebe.Woodworth-Jefcoats@noaa.gov"
+date: "8/30/2020"
+output:
+  html_document:
+    toc: yes
+    fig_width: 10
+    fig_height: 5
+---
+
+## Purpose
+
+The purpose of this script is to create netCDFs for each of the output variables.  Thanks to Ryan Heneghan for sharing the code from which this script is built.
+
+## Load libraries 
+
+``` {r}
+
+library(ncdf4) # For reading/manipulating netCDFs
+library(sp)
+library(raster)
+library(data.table)
+
+```
+
+## Information for meta data
+
+``` {r}
+
+author <- 'Phoebe Woodworth-Jefcoats <phoebe.woodworth-jefcoats@noaa.gov>'
+institution <- 'NOAA Fisheries, Pacific Islands Fisheries Science Center'
+comment <- 'Impact model output for ISIMIP3b and FishMIP Phase 1 2020 Protocol'
+lw_conversion <- 'Contact author for info'
+
+```
+
+## Create files
+
+``` {r}
+
+# Variables through which to loop
+
+output_pattern <- c('tcb', 'tcblog10', 'tpb', 'bp30to90cm', 'bp90cm', 'tc', 'tclog10', 'tpc', 'cp30to90cm', 'cp90cm')
+outputs <- c('tcb', 'tcblog10', 'tpb', 'bp30to90cm', 'bp90cm', 'tc', 'tclog10', 'tpc', 'cp30to90cm', 'cp90cm')
+output_long_names <- c('Total consumer biomass density', 'Total consumer biomass density in log10 weight bins', 'Total pelagic biomass density', 'Biomass density of medium pelagics >= 30cm and < 90cm', 'Biomass density of large pelagics >= 90cm', 'Total catch', 'Total catch in log10 weight bins', 'Total pelagic catch', 'Catch density of medium pelagics >= 30cm and < 90cm', 'Catch density of large pelagics >= 90cm')
+output_comments <- c('All consumers (trophic level > 1, vertebrates and invertebrates)', 'Biomass in equal log10 g C weight bins (lower limits of 1g, 10g, 100g, 1kg, 10kg, 100kg)', 'All pelagic consumers (trophic level > 1, vertebrates and invertebrates)', 'Using conversion length = ...', 'Using conversion length = ...', 'Catch at sea (commercial landings plus discards, fish and invertebrates)', 'Total catch in equal log10 g C weight bins (lower limits of 1g, 10g, 100g, 1kg, 10kg, 100kg)', 'Catch at sea of all pelagic sonsumers (trophic level > 1, vertebrates and invertebrates)', 'Using conversion length = ', 'Using conversion length = ')
+output_units <- c('gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2', 'gCm-2')
+
+esm_model_in <-c('GFDL', 'IPSL')
+esm_model_out <- c('gfdl-esm4', 'ipsl-cm6a-lr')
+climate_scenario <- c('historical')
+fishing_scenario <- c('histsoc', 'nat')
+time_unit <- c('months since 1950-1-1 00:00:00', 'months since 1950-1-1 00:00:00')
+time_start <- c(1950, 1950)
+start_year <- c(1950, 1950)
+end_year <- c(2014,2014)
+
+
+# loop through earth system models and scenarios 
+# three time because there are some combinations that aren't possible
+# Here: past
+
+for (h in 1:length(esm_model_in)) { 
+  for (c in 1:length(climate_scenario)) {
+    for (fish in 1:length(fishing_scenario)) {
+      
+      curr_esm <- esm_model_in[h]
+      curr_climate <- climate_scenario[c]
+      curr_fishing <- fishing_scenario[fish]
+      curr_time_unit <- time_unit[fish]
+      curr_time_start <- time_start[fish]
+      
+      # loop through variables, climate scenarios, and fishing scenarios
+      for(i in 1:length(outputs)) {
+        files2convert <- intersect(list.files(pattern = paste(output_pattern[i], '_', curr_esm, '_', sep ='')),
+                           list.files(pattern = paste(climate_scenario[c], '_', fishing_scenario[fish], sep = '')))
+     
+        # Current files
+        for(j in 1:length(files2convert)) { 
+          curr_file <- files2convert[j]
+          curr_data <- read.csv(curr_file, header = FALSE)
+          
+          # The binned biomass and catch have six values per time step, others have one
+          if (i == 2 | i == 7) {
+            var_data <- curr_data[,1:6]
+          } else {
+            var_data <- curr_data[,1]
+          }
+          
+          
+          # Time
+          time_years <- end_year[fish] - start_year[fish] + 1
+          time_start_diff <- start_year[fish] - curr_time_start
+          
+          # Annual data
+          time_data = time_start_diff*12 + (seq(1:time_years)-1)*12
+          
+          ## CHECK LENGTH OF TIME VARIABLE LINES UP WITH LENGTH OF DATA
+          if (i == 2 | i == 7) {
+            if(length(time_data) != dim(var_data)[[1]]) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          } else {
+            if(length(time_data) != length(var_data)) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          }
+          
+          netcdf_name <- paste('output/mizer_hawaii_', esm_model_out[h], '_nobc_', climate_scenario[c], '_', fishing_scenario[fish], '_default_', outputs[i], '_regional_annual_', start_year[fish], '_', end_year[fish], '.nc', sep = '')
+          
+          # dimensions for netCDF
+          lon1 <- ncdim_def("lon", units = "degrees_east", vals = 0, longname = 'longitude')
+          lat1 <- ncdim_def("lat", units = "degrees_north", vals = 0, longname = 'latitude')
+          # binned biomass/catch has an additional dimension of size
+          size_dim <- ncdim_def("size", units = "log10 g C ", vals = c(1,10,100,1000,10000,100000), longname = 'size in weight bin identified by lower limit')
+          time_dim <- ncdim_def("time", units = curr_time_unit, vals = time_data, unlim = TRUE, calendar = 'standard')
+          
+          
+          if (i == 2 | i == 7){
+            
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, size_dim, time_dim), longname = output_long_names[i], prec = 'float', 1e20)
+            
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+            
+            ncvar_put(ncnew, var_nc4, t(var_data))
+            
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'size','axis', 'Z')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+            
+          } else {
+            
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, time_dim),
+                       longname = output_long_names[i], prec = 'float', 1e20)
+            
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+            
+            ncvar_put(ncnew, var_nc4, var_data)
+            
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+            
+          }
+          
+          ncatt_put(ncnew, 0, 'contact', author)
+          ncatt_put(ncnew, 0, 'institution', institution)
+          ncatt_put(ncnew, 0, 'comment', comment)
+          ncatt_put(ncnew, 0, 'date_created', as.character(Sys.Date()))
+          ncatt_put(ncnew, 0, 'length2weight_conversion', lw_conversion)
+          
+          nc_close(ncnew)
+          
+          } # Current file loop close
+        
+        } # Variable loop close
+    
+    } # Fishing loop close
+    
+  } # Climate scenario loop close
+  
+} # ESM model loop close
+
+
+
+
+
+# Second loop through
+# Projections
+esm_model_in <-c('GFDL', 'IPSL')
+esm_model_out <- c('gfdl-esm4', 'ipsl-cm6a-lr')
+climate_scenario <- c('ssp126', 'ssp585')
+fishing_scenario <- c('2015soc', 'nat')
+time_unit <- c('months since 2015-1-1 00:00:00', 'months since 2015-1-1 00:00:00')
+time_start <- c(2015, 2015)
+start_year <- c(2015, 2015)
+end_year <- c(2100,2100)
+
+
+# loop through earth system models and scenarios
+# three times because there are some combinations that aren't possible
+# Projections
+
+for (h in 1:length(esm_model_in)) {
+  for (c in 1:length(climate_scenario)) {
+    for (fish in 1:length(fishing_scenario)) {
+
+      curr_esm <- esm_model_in[h]
+      curr_climate <- climate_scenario[c]
+      curr_fishing <- fishing_scenario[fish]
+      curr_time_unit <- time_unit[fish]
+      curr_time_start <- time_start[fish]
+
+      # loop through variables, climate scenarios, and fishing scenarios
+      for(i in 1:length(outputs)) {
+        files2convert <- intersect(list.files(pattern = paste(output_pattern[i], '_', curr_esm, '_', sep ='')),
+                           list.files(pattern = paste(climate_scenario[c], '_', fishing_scenario[fish], sep = '')))
+
+        # Current files
+        for(j in 1:length(files2convert)) {
+          curr_file <- files2convert[j]
+          curr_data <- read.csv(curr_file, header = FALSE)
+
+          # The binned biomass and catch have six values per time step, others have one
+          if (i == 2 | i == 7) {
+            var_data <- curr_data[,1:6]
+          } else {
+            var_data <- curr_data[,1]
+          }
+
+
+          # Time
+          time_years <- end_year[fish] - start_year[fish] + 1
+          time_start_diff <- start_year[fish] - curr_time_start
+
+          # Annual data
+          time_data = time_start_diff*12 + (seq(1:time_years)-1)*12
+
+          ## CHECK LENGTH OF TIME VARIABLE LINES UP WITH LENGTH OF DATA
+          if (i == 2 | i == 7) {
+            if(length(time_data) != dim(var_data)[[1]]) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          } else {
+            if(length(time_data) != length(var_data)) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          }
+
+          netcdf_name <- paste('output/mizer_hawaii_', esm_model_out[h], '_nobc_', climate_scenario[c], '_', fishing_scenario[fish], '_default_', outputs[i], '_regional_annual_', start_year[fish], '_', end_year[fish], '.nc', sep = '')
+
+
+          # dimensions for netCDF
+          lon1 <- ncdim_def("lon", units = "degrees_east", vals = 0, longname = 'longitude')
+          lat1 <- ncdim_def("lat", units = "degrees_north", vals = 0, longname = 'latitude')
+          # binned biomass/catch has an additional dimension of size
+          size_dim <- ncdim_def("size", units = "log10 g C ", vals = c(1,10,100,1000,10000,100000), longname = 'size in weight bin identified by lower limit')
+          time_dim <- ncdim_def("time", units = curr_time_unit, vals = time_data, unlim = TRUE, calendar = 'standard')
+
+
+          if (i == 2 | i == 7){
+
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, size_dim, time_dim), longname = output_long_names[i], prec = 'float', 1e20)
+
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+
+            ncvar_put(ncnew, var_nc4, t(var_data))
+
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'size','axis', 'Z')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+
+          } else {
+
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, time_dim),
+                       longname = output_long_names[i], prec = 'float', 1e20)
+
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+
+            ncvar_put(ncnew, var_nc4, var_data)
+
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+
+          }
+
+          ncatt_put(ncnew, 0, 'contact', author)
+          ncatt_put(ncnew, 0, 'institution', institution)
+          ncatt_put(ncnew, 0, 'comment', comment)
+          ncatt_put(ncnew, 0, 'date_created', as.character(Sys.Date()))
+          ncatt_put(ncnew, 0, 'length2weight_conversion', lw_conversion)
+
+          nc_close(ncnew)
+
+          } # Current file loop close
+
+        } # Variable loop close
+
+    } # Fishing loop close
+
+  } # Climate scenario loop close
+
+} # ESM model loop close
+
+
+
+
+# Third time, picontrol
+# There's probably a better way to do this, but I am tired
+# Second loop through
+# Projections
+esm_model_in <-c('GFDL', 'IPSL')
+esm_model_out <- c('gfdl-esm4', 'ipsl-cm6a-lr')
+climate_scenario <- c('picontrol')
+fishing_scenario <- c('histsoc','2015soc','nat')
+time_unit <- c('months since 1950-1-1 00:00:00','months since 2015-1-1 00:00:00','months since 1950-1-1 00:00:00')
+time_start <- c(1950, 2015, 1950)
+start_year <- c(1950, 2015, 1950)
+end_year <- c(2014, 2100, 2100)
+
+
+# loop through earth system models and scenarios
+# three times because there are some combinations that aren't possible
+# Projections
+
+for (h in 1:length(esm_model_in)) {
+  for (c in 1:length(climate_scenario)) {
+    for (fish in 1:length(fishing_scenario)) {
+
+      curr_esm <- esm_model_in[h]
+      curr_climate <- climate_scenario[c]
+      curr_fishing <- fishing_scenario[fish]
+      curr_time_unit <- time_unit[fish]
+      curr_time_start <- time_start[fish]
+
+      # loop through variables, climate scenarios, and fishing scenarios
+      for(i in 1:length(outputs)) {
+        files2convert <- intersect(list.files(pattern = paste(output_pattern[i], '_', curr_esm, '_', sep ='')),
+                           list.files(pattern = paste(climate_scenario[c], '_', fishing_scenario[fish], sep = '')))
+
+        # Current files
+        for(j in 1:length(files2convert)) {
+          curr_file <- files2convert[j]
+          curr_data <- read.csv(curr_file, header = FALSE)
+
+          # The binned biomass and catch have six values per time step, others have one
+          if (i == 2 | i == 7) {
+            var_data <- curr_data[,1:6]
+          } else {
+            var_data <- curr_data[,1]
+          }
+
+
+          # Time
+          time_years <- end_year[fish] - start_year[fish] + 1
+          time_start_diff <- start_year[fish] - curr_time_start
+
+          # Annual data
+          time_data = time_start_diff*12 + (seq(1:time_years)-1)*12
+
+          ## CHECK LENGTH OF TIME VARIABLE LINES UP WITH LENGTH OF DATA
+          if (i == 2 | i == 7) {
+            if(length(time_data) != dim(var_data)[[1]]) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          } else {
+            if(length(time_data) != length(var_data)) {
+              print(paste(curr_file,'Time data length (', length(time_data),') is not equal to variable data length (', length(var_data), ')'))
+            }
+          }
+
+          netcdf_name <- paste('output/mizer_hawaii_', esm_model_out[h], '_nobc_', climate_scenario[c], '_', fishing_scenario[fish], '_default_', outputs[i], '_regional_annual_', start_year[fish], '_', end_year[fish], '.nc', sep = '')
+
+
+          # dimensions for netCDF
+          lon1 <- ncdim_def("lon", units = "degrees_east", vals = 0, longname = 'longitude')
+          lat1 <- ncdim_def("lat", units = "degrees_north", vals = 0, longname = 'latitude')
+          # binned biomass/catch has an additional dimension of size
+          size_dim <- ncdim_def("size", units = "log10 g C ", vals = c(1,10,100,1000,10000,100000), longname = 'size in weight bin identified by lower limit')
+          time_dim <- ncdim_def("time", units = curr_time_unit, vals = time_data, unlim = TRUE, calendar = 'standard')
+
+
+          if (i == 2 | i == 7){
+
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, size_dim, time_dim), longname = output_long_names[i], prec = 'float', 1e20)
+
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+
+            ncvar_put(ncnew, var_nc4, t(var_data))
+
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'size','axis', 'Z')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+
+          } else {
+
+            var_nc4 <- ncvar_def(name = outputs[i], units = output_units[i], dim = list(lon1, lat1, time_dim),
+                       longname = output_long_names[i], prec = 'float', 1e20)
+
+            ncnew <- nc_create(netcdf_name, list(var_nc4))
+
+            ncvar_put(ncnew, var_nc4, var_data)
+
+            ncatt_put(ncnew, 'lon', 'axis', 'X')
+            ncatt_put(ncnew, 'lat', 'axis', 'Y')
+            ncatt_put(ncnew, 'time', 'axis', 'T')
+
+          }
+
+          ncatt_put(ncnew, 0, 'contact', author)
+          ncatt_put(ncnew, 0, 'institution', institution)
+          ncatt_put(ncnew, 0, 'comment', comment)
+          ncatt_put(ncnew, 0, 'date_created', as.character(Sys.Date()))
+          ncatt_put(ncnew, 0, 'length2weight_conversion', lw_conversion)
+
+          nc_close(ncnew)
+
+          } # Current file loop close
+
+        } # Variable loop close
+
+    } # Fishing loop close
+
+  } # Climate scenario loop close
+
+} # ESM model loop close
+
+
+```
